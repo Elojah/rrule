@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+          # No dependency, so no go.sum.
+          cache-dependency-path: go.mod
+
+      # Pinned, so that lint results are the same locally and in CI. The Makefile uses ./bin/golangci-lint when present.
+      - name: Install golangci-lint
+        run: curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b ./bin v2.11.3
+
+      - name: Lint and test
+        run: make check
+
+  tinygo:
+    runs-on: ubuntu-latest
+    # Pinned, like golangci-lint. The image runs as its user tinygo, which cannot write the runner's files: actions
+    # need root.
+    container:
+      image: tinygo/tinygo:0.43.0
+      options: --user root
+    # The checkout belongs to another user than the container's, so git refuses it and Go fails to stamp the VCS.
+    env:
+      GOFLAGS: -buildvcs=false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Run the tests with TinyGo
+        run: make tinygo-test
+
+      - name: Run each example with TinyGo and check its output
+        run: make tinygo-run
+
+      - name: Build each example for pico with TinyGo
+        run: make tinygo-build

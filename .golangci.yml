@@ -1,0 +1,156 @@
+version: "2"
+
+linters:
+  default: all
+  enable:
+    - arangolint
+    - asasalint
+    - asciicheck
+    - bidichk
+    - bodyclose
+    - canonicalheader
+    - containedctx
+    - contextcheck
+    - copyloopvar
+    - cyclop
+    - decorder
+    # - depguard
+    - dogsled
+    # - dupl
+    - dupword
+    - durationcheck
+    - embeddedstructfieldcheck
+    - err113
+    - errcheck
+    - errchkjson
+    - errname
+    - errorlint
+    - exhaustive
+    # - exhaustruct
+    - exptostd
+    - fatcontext
+    - forbidigo
+    - forcetypeassert
+    - funcorder
+    # - funlen
+    - ginkgolinter
+    - gocheckcompilerdirectives
+    # - gochecknoglobals
+    - gochecknoinits
+    - gochecksumtype
+    - gocognit
+    # - goconst
+    # - gocritic
+    - gocyclo
+    - godot
+    # - godox
+    - goheader
+    - gomoddirectives
+    - gomodguard
+    - goprintffuncname
+    - gosec
+    - gosmopolitan
+    - govet
+    - grouper
+    - iface
+    - importas
+    # - inamedparam
+    - ineffassign
+    # - interfacebloat
+    - intrange
+    - ireturn
+    - lll
+    - loggercheck
+    - maintidx
+    - makezero
+    - mirror
+    - misspell
+    # - mnd
+    - musttag
+    - nakedret
+    - nestif
+    - nilerr
+    - nilnesserr
+    - nilnil
+    - nlreturn
+    - noctx
+    # - noinlineerr
+    - nolintlint
+    - nonamedreturns
+    - nosprintfhostport
+    - paralleltest
+    - perfsprint
+    - prealloc
+    - predeclared
+    - promlinter
+    - protogetter
+    - reassign
+    # - recvcheck
+    # - revive
+    # - rowserrcheck
+    - sloglint
+    - spancheck
+    - sqlclosecheck
+    - staticcheck
+    - tagalign
+    # - tagliatelle
+    - testableexamples
+    - testifylint
+    - testpackage
+    - thelper
+    - tparallel
+    - unconvert
+    # - unparam
+    - unused
+    - usestdlibvars
+    - usetesting
+    # - varnamelen
+    - wastedassign
+    - whitespace
+    # - wrapcheck
+    # - wsl
+    # - wsl_v5
+    - zerologlint
+  disable:
+    - depguard # Hard to maintain for no plus value
+    - dupl # In a template world why not but in Go...
+    - exhaustruct # Default ommited values are ok
+    - funlen # Makes no sense in an actual project
+    - gochecknoglobals # May be ok to have const
+    - goconst # For "classic" strings like POST, prefer to keep them hardcode
+    - gocritic # Raise switch type but there is no way to change it in if clause
+    - godox # Very convenient but enable/disable manually
+    - inamedparam # Named parameters are not idiomatic in Go
+    - interfacebloat # Hard to maintain for DDD layers
+    - mnd # Not realistic for a medium size project
+    - noinlineerr # why though ?
+    - recvcheck # Why forbid this ?
+    - revive # wants to merge error checking and return
+    - rowserrcheck # Would be great to enable it but too many false positives, needs fixing
+    - tagliatelle # No ? mix snake and camel case is ok for env/json vars
+    - unparam # Error return should be automatic, even in nil case
+    - varnamelen # Personal opinion, but I think it's better to keep variable names short
+    - wrapcheck # Errors only defined in own package don't feel right
+    - wsl # deprecated
+    - wsl_v5 # False positive ? not sure how to use
+
+  settings:
+    gocognit:
+      min-complexity: 100
+    nestif:
+      min-complexity: 10
+    lll:
+      line-length: 180
+    cyclop:
+      max-complexity: 30
+    gomoddirectives:
+      # tools/modelgen is a module of its own, which builds against the working tree.
+      replace-local: true
+  exclusions:
+    generated: lax
+    warn-unused: true
+    rules:
+      # The examples are programs whose job is to print what happens.
+      - path: ^examples/
+        linters:
+          - forbidigo
