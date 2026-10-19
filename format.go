@@ -47,6 +47,11 @@ func (r Rule) format(until func(time.Time) string) string {
 	b.WriteString("FREQ=")
 	b.WriteString(r.Freq.String())
 
+	if r.XFreq != 0 {
+		b.WriteString(";X-FREQ=")
+		b.WriteString(formatXFreq(r.XFreq))
+	}
+
 	if !r.Until.IsZero() {
 		b.WriteString(";UNTIL=")
 		b.WriteString(until(r.Until))
@@ -184,6 +189,36 @@ func (s Set) formatter() setFormatter {
 	}
 
 	return setFormatter{params: ";TZID=" + name, value: in(layoutDateTime, ""), until: utc}
+}
+
+// formatXFreq writes a positive duration as ISO 8601 does, in hours, minutes and seconds, such as PT1H30M or PT0.5S.
+func formatXFreq(d time.Duration) string {
+	if d < 0 {
+		return d.String() // which Validate refuses
+	}
+
+	h, m, ns := d/time.Hour, d%time.Hour/time.Minute, d%time.Minute
+	s := "PT"
+
+	if h > 0 {
+		s += strconv.FormatInt(int64(h), 10) + "H"
+	}
+
+	if m > 0 {
+		s += strconv.FormatInt(int64(m), 10) + "M"
+	}
+
+	if ns > 0 {
+		s += strconv.FormatInt(int64(ns/time.Second), 10)
+
+		if frac := ns % time.Second; frac > 0 {
+			s += "." + strings.TrimRight(strconv.FormatInt(int64(frac+time.Second), 10)[1:], "0")
+		}
+
+		s += "S"
+	}
+
+	return s
 }
 
 func writeInt(b *strings.Builder, name string, v int) {

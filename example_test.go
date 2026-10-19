@@ -26,6 +26,30 @@ func ExampleParse() {
 	// Fri 2026-03-27 17:00
 }
 
+func ExampleParse_xFreq() {
+	// Every quarter of a second, 5 times: readers that do not know X-FREQ read every second.
+	r, err := rrule.Parse("FREQ=SECONDLY;X-FREQ=PT0.25S;COUNT=5")
+	if err != nil {
+		fmt.Println(err)
+
+		return
+	}
+
+	fmt.Println(r.XFreq)
+
+	for t := range r.All(time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)) {
+		fmt.Println(t.Format("15:04:05.000"))
+	}
+
+	// Output:
+	// 250ms
+	// 12:00:00.000
+	// 12:00:00.250
+	// 12:00:00.500
+	// 12:00:00.750
+	// 12:00:01.000
+}
+
 func ExampleRule_All() {
 	// The first Monday of each quarter, forever: the loop ends it.
 	r := rrule.Rule{Freq: rrule.Monthly, Interval: 3, ByDay: []rrule.WeekdayNum{rrule.Monday.Nth(1)}}

@@ -26,6 +26,9 @@ func seedRules(f *testing.F) []string {
 		"FREQ=MINUTELY;INTERVAL=20;BYHOUR=9,10,11,12,13,14,15,16",
 		"FREQ=HOURLY;INTERVAL=3;UNTIL=19970902T170000Z",
 		"FREQ=SECONDLY;BYSECOND=0,60;COUNT=3",
+		"FREQ=SECONDLY;X-FREQ=PT0.5S;COUNT=10",
+		"FREQ=HOURLY;INTERVAL=3;X-FREQ=PT1H30M;BYDAY=MO,FR",
+		"FREQ=MINUTELY;X-FREQ=PT0.001S;BYHOUR=12;BYSECOND=0,30",
 	}
 
 	b, err := os.ReadFile("testdata/dateutil.txt")
@@ -106,9 +109,9 @@ func FuzzParseSet(f *testing.F) {
 	})
 }
 
-// FuzzAll checks what any rule's occurrences hold to: they increase, from start, to UNTIL and COUNT, and each passes
-// the rule's BYxxx parts, checked here without the expansion's code. It looks 30 years ahead at most, with Between,
-// since All goes on to 9999 for a rule nothing matches.
+// FuzzAll checks what any rule's occurrences hold to: they increase, from start, to UNTIL and COUNT, each passes the
+// rule's BYxxx parts, checked here without the expansion's code, and is a number of X-FREQs from start, which is in
+// UTC. It looks 30 years ahead at most, with Between, since All goes on to 9999 for a rule nothing matches.
 func FuzzAll(f *testing.F) {
 	for i, r := range seedRules(f) {
 		f.Add(r, int64(i)*7919*86400+int64(i)*3607)
@@ -141,6 +144,8 @@ func FuzzAll(f *testing.F) {
 				t.Fatalf("%s after UNTIL", o)
 			case r.Count > 0 && n == r.Count:
 				t.Fatalf("%s past COUNT", o)
+			case r.XFreq > 0 && o.Sub(start)%r.XFreq != 0:
+				t.Fatalf("%s not a number of X-FREQs from the start", o)
 			}
 
 			if why := mismatch(r, start, o); why != "" {
@@ -155,8 +160,13 @@ func FuzzAll(f *testing.F) {
 
 // mismatch returns which of r's BYxxx parts, or the defaults it takes from start, o does not match, or "".
 func mismatch(r rrule.Rule, start, o time.Time) string {
+	freq := r.Freq
+	if r.XFreq > 0 {
+		freq = rrule.Secondly // whose parts all limit, and take nothing from start
+	}
+
 	clock := func(part string, values []int, v, def int, from rrule.Frequency) string {
-		if len(values) > 0 && !slices.Contains(values, v) || len(values) == 0 && r.Freq >= from && v != def {
+		if len(values) > 0 && !slices.Contains(values, v) || len(values) == 0 && freq >= from && v != def {
 			return part
 		}
 
@@ -164,7 +174,7 @@ func mismatch(r rrule.Rule, start, o time.Time) string {
 	}
 
 	for _, why := range []string{
-		mismatchDay(r, start, o),
+		mismatchDay(r, freq, start, o),
 		clock("BYHOUR", r.ByHour, o.Hour(), start.Hour(), rrule.Daily),
 		clock("BYMINUTE", r.ByMinute, o.Minute(), start.Minute(), rrule.Hourly),
 		clock("BYSECOND", r.BySecond, o.Second(), start.Second(), rrule.Minutely),
@@ -177,8 +187,8 @@ func mismatch(r rrule.Rule, start, o time.Time) string {
 	return ""
 }
 
-// mismatchDay is mismatch for the day parts.
-func mismatchDay(r rrule.Rule, start, o time.Time) string {
+// mismatchDay is mismatch for the day parts, with the defaults of freq.
+func mismatchDay(r rrule.Rule, freq rrule.Frequency, start, o time.Time) string {
 	daysIn := func(y int, m time.Month) int { return time.Date(y, m+1, 0, 0, 0, 0, 0, time.UTC).Day() }
 	signed := func(values []int, n, total int) bool {
 		return slices.Contains(values, n) || slices.Contains(values, n-total-1)
@@ -209,11 +219,11 @@ func mismatchDay(r rrule.Rule, start, o time.Time) string {
 	}
 
 	switch {
-	case r.Freq == rrule.Yearly && len(r.ByMonth) == 0 && o.Month() != start.Month():
+	case freq == rrule.Yearly && len(r.ByMonth) == 0 && o.Month() != start.Month():
 		return "the start's month"
-	case (r.Freq == rrule.Yearly || r.Freq == rrule.Monthly) && o.Day() != start.Day():
+	case (freq == rrule.Yearly || freq == rrule.Monthly) && o.Day() != start.Day():
 		return "the start's day"
-	case r.Freq == rrule.Weekly && o.Weekday() != start.Weekday():
+	case freq == rrule.Weekly && o.Weekday() != start.Weekday():
 		return "the start's weekday"
 	}
 

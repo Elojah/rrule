@@ -8,6 +8,8 @@ Recurrence rules from Go, RFC 5545's: read, write and expand iCalendar's RRULE, 
 - **Rules**: every frequency and BYxxx part, BYSETPOS, COUNT and UNTIL, WKST, expanded as python-dateutil, the
   reference implementation, does: tests check over 10,000 occurrences of random rules against it, and every example
   of the RFC.
+- **Sub-second periods**: `X-FREQ`, a rule part of this package's, holds a period as an ISO 8601 duration, such as
+  `FREQ=SECONDLY;X-FREQ=PT0.5S`, every half second. FREQ stays, for readers that do not know X-FREQ.
 - **Sets**: DTSTART, RRULE, RDATE, EXDATE and EXRULE, read from and written to iCalendar lines, with TZID, dates and
   floating times.
 - **Time zones**: rules repeat on the wall clock, and daylight saving time's skipped and repeated wall clocks follow
@@ -89,12 +91,17 @@ Each is a program, `go run ./examples/01-rule`, whose test checks what it prints
 - **A rule repeats on the start's wall clock.** A daily 09:00 stays at 09:00 across daylight saving time. A wall clock
   that does not exist moves forward by the gap (02:30 becomes 03:30), one that happens twice is its first instant, and
   each instant comes once: an hourly rule does not repeat the hour clocks go back over.
+- **X-FREQ replaces FREQ and INTERVAL**, which are left for readers that do not know it:
+  `FREQ=HOURLY;INTERVAL=2;X-FREQ=PT90M` repeats every 90 minutes from the start, on its wall clock as FREQ does. Every
+  BYxxx part then limits, none takes the start's value, and BYSETPOS picks among a period's one candidate. X-FREQ is
+  hours, minutes and seconds, to the nanosecond: days and longer are FREQ's.
 - **Invalid dates are skipped**, and not counted: `BYMONTHDAY=30` has no February.
 - **Expansion ends**, in 9999 at the latest, even for a rule nothing matches. `Between` ends at its end, however few
   occurrences rules have and however many EXDATEs and EXRULEs take away; `All` and `Set.After` may go far to find the
   next.
 - **Parsing is strict**: an unknown rule part, property or parameter is an error, and so is a rule part the RFC does
-  not allow with its frequency. RFC 7529's RSCALE and SKIP, and RDATE periods, are `ErrUnsupported`.
+  not allow with its frequency. X-FREQ is the one `X-` rule part read. RFC 7529's RSCALE and SKIP, and RDATE periods,
+  are `ErrUnsupported`.
 - **Floating times are read in UTC** by default, so that results do not depend on the host: `WithLocation` changes it.
 
 ## Development

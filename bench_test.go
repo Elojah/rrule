@@ -47,6 +47,7 @@ func BenchmarkRule_All(b *testing.B) {
 		{"hourly-zoned", "FREQ=HOURLY;INTERVAL=7", paris},
 		{"minutely-byhour", "FREQ=MINUTELY;INTERVAL=15;BYHOUR=9,10,11,12,13,14,15,16,17", utc},
 		{"secondly-filtered", "FREQ=SECONDLY;BYHOUR=12;BYMINUTE=0;BYSECOND=0", utc},
+		{"xfreq-subsecond", "FREQ=SECONDLY;X-FREQ=PT0.25S;BYMINUTE=0", utc},
 	} {
 		r, err := rrule.Parse(c.rule)
 		if err != nil {

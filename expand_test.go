@@ -157,6 +157,12 @@ func TestAll_Ends(t *testing.T) {
 		"FREQ=SECONDLY;BYSECOND=60",
 		"FREQ=DAILY;BYSECOND=60",
 		"FREQ=DAILY;UNTIL=20251231T000000Z",
+		"FREQ=SECONDLY;BYMONTH=1;BYSETPOS=2",
+		"FREQ=HOURLY;X-FREQ=PT24H;BYHOUR=1",
+		"FREQ=SECONDLY;X-FREQ=PT2.5S;BYSECOND=1,3,4",
+		"FREQ=SECONDLY;X-FREQ=PT0.000000001S;BYMONTH=2;BYMONTHDAY=30",
+		"FREQ=SECONDLY;X-FREQ=PT0.000000001S;BYSECOND=60",
+		"FREQ=SECONDLY;X-FREQ=PT0.5S;BYMONTH=1;BYSETPOS=2",
 	} {
 		t.Run(rule, func(t *testing.T) {
 			t.Parallel()
@@ -171,6 +177,63 @@ func TestAll_Ends(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestAll_XFreq checks that an X-FREQ of whole seconds, minutes or hours yields what FREQ and INTERVAL do, which
+// INTERVAL then does not change, across both changes of daylight saving time, with BYxxx parts that limit under FREQ.
+func TestAll_XFreq(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 1, 5, 9, 0, 0, 0, zone(t, "Europe/Paris"))
+	end := start.AddDate(1, 0, 0)
+
+	for rule, xfreq := range map[string]string{
+		"FREQ=HOURLY;INTERVAL=5;BYHOUR=3,8,13":                             "PT5H",
+		"FREQ=HOURLY;INTERVAL=7;BYMONTHDAY=-1":                             "PT7H",
+		"FREQ=MINUTELY;INTERVAL=20;BYHOUR=1,2,3;BYDAY=SU":                  "PT20M",
+		"FREQ=SECONDLY;INTERVAL=90;BYMINUTE=0,1,2;BYHOUR=2,3;BYMONTH=3,10": "PT1M30S",
+	} {
+		t.Run(rule, func(t *testing.T) {
+			t.Parallel()
+
+			r, err := rrule.Parse(rule)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			x, err := rrule.Parse(rule + ";X-FREQ=" + xfreq)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			want := take(r.Between(start, start, end), -1)
+			if len(want) == 0 {
+				t.Fatal("no occurrences")
+			}
+
+			equal(t, format(take(x.Between(start, start, end), -1), time.RFC3339), format(want, time.RFC3339))
+		})
+	}
+}
+
+// TestAll_XFreqDST checks that an X-FREQ keeps to the wall clock across a gap, as FREQ does: a wall clock in the gap
+// moves forward by it, and the wall clocks after it, the same instants, do not come again.
+func TestAll_XFreqDST(t *testing.T) {
+	t.Parallel()
+
+	r, err := rrule.Parse("FREQ=SECONDLY;X-FREQ=PT0.5S;BYMINUTE=59;BYSECOND=59;COUNT=6")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := take(r.All(time.Date(2026, 3, 8, 1, 59, 59, 0, zone(t, "America/New_York"))), -1)
+	for i, o := range got {
+		got[i] = o.UTC()
+	}
+
+	equal(t, format(got, "15:04:05.0"), []string{
+		"06:59:59.0", "06:59:59.5", "07:59:59.0", "07:59:59.5", "08:59:59.0", "08:59:59.5",
+	})
 }
 
 // TestAll checks the rest of what All promises.
@@ -271,6 +334,46 @@ func TestAll(t *testing.T) {
 			start: time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC), // a Friday, in week 53 of 2026
 			n:     2,
 			want:  []string{"2027-01-01 00:00:00", "2027-12-31 00:00:00"},
+		},
+		{
+			name:  "X-FREQ, from the start's nanoseconds",
+			rule:  rrule.Rule{Freq: rrule.Secondly, XFreq: 500 * time.Millisecond},
+			start: start,
+			n:     3,
+			want:  []string{"2026-01-05 09:30:15.0000005", "2026-01-05 09:30:15.5000005", "2026-01-05 09:30:16.0000005"},
+		},
+		{
+			name:  "X-FREQ without FREQ's interval, nor its minute from the start",
+			rule:  rrule.Rule{Freq: rrule.Hourly, Interval: 5, XFreq: 90 * time.Minute},
+			start: start,
+			n:     3,
+			want:  []string{"2026-01-05 09:30:15.0000005", "2026-01-05 11:00:15.0000005", "2026-01-05 12:30:15.0000005"},
+		},
+		{
+			name:  "X-FREQ within the seconds BYSECOND limits to",
+			rule:  rrule.Rule{Freq: rrule.Secondly, XFreq: 400 * time.Millisecond, BySecond: []int{0}},
+			start: time.Date(2026, 1, 5, 9, 30, 0, 0, time.UTC),
+			n:     5,
+			want: []string{
+				"2026-01-05 09:30:00", "2026-01-05 09:30:00.4", "2026-01-05 09:30:00.8", "2026-01-05 09:31:00",
+				"2026-01-05 09:31:00.4",
+			},
+		},
+		{
+			name: "X-FREQ, a period of which has one candidate for BYSETPOS",
+			rule: rrule.Rule{
+				Freq: rrule.Yearly, ByMonth: []time.Month{time.January}, BySetPos: []int{-1}, XFreq: time.Hour,
+			},
+			start: start,
+			n:     2,
+			want:  []string{"2026-01-05 09:30:15.0000005", "2026-01-05 10:30:15.0000005"},
+		},
+		{
+			name:  "X-FREQ, with a numbered weekday of the year as FREQ says",
+			rule:  rrule.Rule{Freq: rrule.Yearly, ByDay: []rrule.WeekdayNum{rrule.Monday.Nth(2)}, XFreq: 12 * time.Hour},
+			start: start,
+			n:     3,
+			want:  []string{"2026-01-12 09:30:15.0000005", "2026-01-12 21:30:15.0000005", "2027-01-11 09:30:15.0000005"},
 		},
 	}
 

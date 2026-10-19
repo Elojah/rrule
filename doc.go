@@ -20,6 +20,10 @@
 // leaves to DTSTART: a rule's parts that it lacks take their values from the start, so that FREQ=MONTHLY repeats on
 // the start's day of the month, at its time. Parse reads a rule, and String writes it.
 //
+// X-FREQ, a rule part of this package's, holds periods that FREQ cannot write, as an ISO 8601 duration of hours,
+// minutes and seconds: FREQ=SECONDLY;X-FREQ=PT0.5S repeats every half second, and readers that do not know X-FREQ
+// read FREQ and INTERVAL instead. Rule.XFreq says what it does to the other parts.
+//
 // What a BYxxx part does depends on the frequency, as RFC 5545's table in section 3.3.10 says: BYDAY expands a
 // weekly rule to each day it lists, and limits a daily one to them. Rules expand as python-dateutil, RFC 5545's
 // reference implementation, does: tests check thousands of occurrences against it, and every example of the RFC.

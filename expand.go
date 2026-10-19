@@ -54,8 +54,10 @@ type expansion struct {
 	first    int64 // start's period, which the others are counted from
 	period   int64
 	last     int64 // the last period that may hold an occurrence
-	nsec     int
+	every    int64 // X-FREQ in nanoseconds, the step of a SECONDLY rule's periods if not 0
+	nsec     int   // of the current period's candidates: start's, but under X-FREQ
 	startKey int64 // start's civil time, as day*secondsPerDay + second of the day
+	startNs  int   // and its nanoseconds, which X-FREQ's periods count from
 	remain   int   // occurrences left, -1 for no COUNT
 	until    time.Time
 	end      time.Time // the first instant not to yield, if not zero
@@ -123,13 +125,22 @@ func newExpansion(r Rule, start, end time.Time) *expansion {
 	e := &expansion{
 		freq:     r.Freq,
 		wkst:     r.WeekStart,
+		every:    int64(r.XFreq),
 		nsec:     start.Nanosecond(),
 		startKey: startDay*secondsPerDay + int64(startSec),
+		startNs:  start.Nanosecond(),
 		remain:   -1,
 		until:    r.Until,
 		end:      end,
 		loc:      loc,
 		setPos:   r.BySetPos,
+		nthYear:  r.Freq == Yearly && len(r.ByMonth) == 0, // as the rule's FREQ counts, under X-FREQ too
+	}
+
+	if e.every > 0 {
+		// X-FREQ's periods are those of a SECONDLY rule, of another length: every BYxxx part limits, and none takes
+		// start's value.
+		r.Freq, e.freq = Secondly, Secondly
 	}
 
 	if r.Count > 0 {
@@ -143,6 +154,8 @@ func newExpansion(r Rule, start, end time.Time) *expansion {
 	switch {
 	case y < 0 || y > 9999, !r.Until.IsZero() && r.Until.Before(start), len(e.times) == 0, !e.reachable(startSec):
 		e.done = true
+	case e.freq == Secondly && len(e.setPos) > 0 && !slices.Contains(e.setPos, 1) && !slices.Contains(e.setPos, -1):
+		e.done = true // a SECONDLY period has one candidate, which BYSETPOS leaves out
 	default:
 		e.fill()
 	}
@@ -234,8 +247,6 @@ func (e *expansion) filters(r Rule, start time.Time) {
 		}
 	}
 
-	e.nthYear = r.Freq == Yearly && len(r.ByMonth) == 0
-
 	if len(r.ByWeekNo) == 0 && len(r.ByYearDay) == 0 && len(r.ByMonthDay) == 0 && len(r.ByDay) == 0 {
 		_, month, day := start.Date()
 
@@ -322,6 +333,14 @@ func (e *expansion) periods(r Rule, startDay int64, startSec int) {
 		}
 	}
 
+	if e.every > 0 {
+		// The periods of X-FREQ count from start's, 0, to the last before the day after lastDay. Interval is FREQ's.
+		e.first, e.step, e.period = 0, 1, 0
+		e.last = e.periodAt((lastDay+1)*secondsPerDay) - 1
+
+		return
+	}
+
 	y, m, _ := civilFromDays(startDay)
 	ly, lm, _ := civilFromDays(lastDay)
 	sec := int64(startSec)
@@ -348,7 +367,8 @@ func (e *expansion) periods(r Rule, startDay int64, startSec int) {
 }
 
 // reachable reports whether a period shorter than a day can have one of the hours, minutes and seconds the rule
-// limits to: those it lands on repeat with the greatest common divisor of the step and the day, from start's.
+// limits to: those it lands on repeat with the greatest common divisor of the step and the day, from start's. Under
+// X-FREQ, they are nanoseconds, and a second is reachable if one of its nanoseconds is.
 func (e *expansion) reachable(startSec int) bool {
 	var units, unit int64
 
@@ -370,6 +390,18 @@ func (e *expansion) reachable(startSec int) bool {
 
 	g := gcd(e.step%units, units)
 	want := (int64(startSec) / unit) % g
+	width := int64(1) // of an hour, a minute or a second, in the units of the step
+
+	if e.every > 0 {
+		units, width = secondsPerDay*int64(time.Second), int64(time.Second)
+		g = gcd(e.every%units, units)
+		want = (int64(startSec)*width + int64(e.startNs)) % g
+	}
+
+	// hit reports whether the step lands in the nth hour, minute or second of the day.
+	hit := func(n int) bool {
+		return ((want-int64(n)*width)%g+g)%g < width
+	}
 
 	for h := range 24 {
 		if e.hours != 0 && e.hours&(1<<h) == 0 {
@@ -377,7 +409,7 @@ func (e *expansion) reachable(startSec int) bool {
 		}
 
 		if e.freq == Hourly {
-			if int64(h)%g == want {
+			if hit(h) {
 				return true
 			}
 
@@ -390,7 +422,7 @@ func (e *expansion) reachable(startSec int) bool {
 			}
 
 			if e.freq == Minutely {
-				if int64(h*60+m)%g == want {
+				if hit(h*60 + m) {
 					return true
 				}
 
@@ -398,7 +430,7 @@ func (e *expansion) reachable(startSec int) bool {
 			}
 
 			for s := range 60 {
-				if (e.seconds == 0 || e.seconds&(1<<s) != 0) && int64(h*3600+m*60+s)%g == want {
+				if (e.seconds == 0 || e.seconds&(1<<s) != 0) && hit(h*3600+m*60+s) {
 					return true
 				}
 			}
@@ -565,23 +597,36 @@ func (e *expansion) fillTime() bool {
 	unit := secondsPerDay / perDay
 	day := floorDiv(e.period, perDay)
 	sec := (e.period - day*perDay) * unit
+
+	if e.every > 0 {
+		var key int64
+
+		key, e.nsec = e.civilAt(e.period)
+		day = floorDiv(key, secondsPerDay)
+		sec = key - day*secondsPerDay
+	}
+
 	h, m, s := int(sec/3600), int(sec/60%60), int(sec%60)
 
-	// Every period before the next hour, minute or second the rule has is filtered: jump lands on the first of them
-	// that the interval reaches.
-	to := func(sec int) {
-		e.jump((day*secondsPerDay + int64(sec)) / unit)
+	// Every period before the next day, hour, minute or second the rule has is filtered: jump lands on the first of
+	// them that the interval reaches.
+	to := func(day int64, sec int) {
+		if key := day*secondsPerDay + int64(sec); e.every > 0 {
+			e.jump(e.periodAt(key))
+		} else {
+			e.jump(key / unit)
+		}
 	}
 
 	switch {
 	case !e.dayOK(day):
-		e.jump(e.nextDay(day) * perDay)
+		to(e.nextDay(day), 0)
 	case e.hours != 0 && e.hours&(1<<h) == 0:
-		to(nextBit(uint64(e.hours), h, 24) * 3600)
+		to(day, nextBit(uint64(e.hours), h, 24)*3600)
 	case e.freq <= Minutely && e.minutes != 0 && e.minutes&(1<<m) == 0:
-		to(h*3600 + nextBit(e.minutes, m, 60)*60)
+		to(day, h*3600+nextBit(e.minutes, m, 60)*60)
 	case e.freq == Secondly && e.seconds != 0 && e.seconds&(1<<s) == 0:
-		to(h*3600 + m*60 + nextBit(e.seconds, s, 60))
+		to(day, h*3600+m*60+nextBit(e.seconds, s, 60))
 	default:
 		e.days = append(e.days, day)
 		e.base = sec
@@ -590,6 +635,42 @@ func (e *expansion) fillTime() bool {
 	}
 
 	return false
+}
+
+// civilAt returns the civil time of X-FREQ period k, k X-FREQs after start's, as a key and nanoseconds.
+func (e *expansion) civilAt(k int64) (int64, int) {
+	// k X-FREQs over 1e9, in 128 bits: k is at most the last period, so the high word is below 1e9.
+	hi, lo := bits.Mul64(uint64(k), uint64(e.every)) //nolint:gosec // both positive
+	sec, ns := bits.Div64(hi, lo, uint64(time.Second))
+	ns += uint64(e.startNs) //nolint:gosec // below 1e9
+	sec += ns / uint64(time.Second)
+
+	return e.startKey + int64(sec), int(ns % uint64(time.Second)) //nolint:gosec // seconds to 9999, below 1e9
+}
+
+// periodAt returns the first X-FREQ period whose civil time is at or after the second key, from 0, start's, to
+// maxStep at most, which no expansion reaches.
+func (e *expansion) periodAt(key int64) int64 {
+	sec := key - e.startKey
+	if sec <= 0 {
+		return 0
+	}
+
+	// The nanoseconds from start's, rounded up to a period, in 128 bits: from year 0 to 9999, they reach 2^69.
+	every := uint64(e.every) //nolint:gosec // positive
+	hi, lo := bits.Mul64(uint64(sec), uint64(time.Second))
+	lo, borrow := bits.Sub64(lo, uint64(e.startNs), 0) //nolint:gosec // below 1e9
+	hi -= borrow
+	lo, carry := bits.Add64(lo, every-1, 0)
+	hi += carry
+
+	if hi >= every {
+		return maxStep
+	}
+
+	k, _ := bits.Div64(hi, lo, every)
+
+	return int64(min(k, maxStep)) //nolint:gosec // at most maxStep
 }
 
 // dayOK reports whether a day passes the day filters.
@@ -739,6 +820,7 @@ func gcd(a, b int64) int64 {
 }
 
 // maxStep is more periods than years 0 to 9999 have seconds, small enough that jump's arithmetic does not overflow.
+// X-FREQ's periods stop there too: under 69 nanoseconds, it ends 2^62 periods after the start, 146 years at least.
 const maxStep = 1 << 62
 
 // mulSat returns a×b for positive a and b, or maxStep if it is more.

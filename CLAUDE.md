@@ -7,8 +7,9 @@ Commands, fragile invariants and settled decisions. Behaviour is in godoc and th
 `github.com/elojah/rrule`, RFC 5545 recurrence rules and sets. Go 1.26.1, no dependency, one package.
 
 Files: `rule.go` (`Rule`, `Frequency`, `Weekday`, `WeekdayNum`, `Validate`), `parse.go` (`Parse`, `ParseSet`,
-options, content lines), `format.go` (`String`s, text marshalers), `set.go` (`Set`, `Form`, the merge), `expand.go`
-(the expansion of a rule), `calendar.go` (civil days, week numbers, `wall`), `errors.go`. `examples/` are programs.
+options, content lines, X-FREQ's durations), `format.go` (`String`s, text marshalers), `set.go` (`Set`, `Form`, the
+merge), `expand.go` (the expansion of a rule), `calendar.go` (civil days, week numbers, `wall`), `errors.go`.
+`examples/` are programs.
 
 `testdata/dateutil.txt` is what python-dateutil expands random rules to: `make vectors` writes it with
 `tools/vectors/gen.py`, never edit it. `testdata/zoneinfo` holds the TZif files tests load their zones from.
@@ -46,19 +47,22 @@ package-level var), and `gosec`'s G115 on integer conversions. CI runs `make che
 ## Invariants
 
 - **Expansion works on civil time** (days from 1970-01-01, seconds of the day, as a key `day*86400+sec`), and only an
-  occurrence becomes an instant, through `wall`. Never compute on `time.Time` in a location in between.
+  occurrence becomes an instant, through `wall`. Never compute on `time.Time` in a location in between. Under X-FREQ a
+  period is a number of X-FREQs from the start's civil time (`civilAt`, `periodAt`, in 128 bits), and `nsec` is each
+  period's; otherwise every candidate has the start's nanoseconds.
 - **`wall` implements RFC 5545 3.3.5**: a repeated wall clock is its first instant, a skipped one keeps the offset from
   before the gap. `time.Date` picks either, depending on the zone (`TestAll_DST`, Paris against New York). Its
   `zoneCache` fast path trusts an offset only more than a day from its zone's bounds.
 - **A rule's instants strictly increase**: `next` drops any not after the last (`prev`). A gap moves wall clocks onto or
-  before later ones under HOURLY and MINUTELY. COUNT and UNTIL apply after; `merger` relies on sorted sources.
+  before later ones under HOURLY, MINUTELY and X-FREQ. COUNT and UNTIL apply after; `merger` relies on sorted sources.
 - **Expansion always ends**: `periods` bounds the last period by 9999-12-31 or the day after UNTIL; `reachable` ends a
   rule whose interval never lands on a BYHOUR, BYMINUTE or BYSECOND (a gcd check); periods shorter than a day jump
   over a filtered day, hour, minute or second (`fillTime`, `nextBit`), and DAILY and shorter over a month BYMONTH
-  leaves out (`nextDay`). `TestAll_Ends` holds the cases.
+  leaves out (`nextDay`). A SECONDLY or X-FREQ period has one candidate, so a BYSETPOS without 1 or -1 ends the rule
+  at once. `TestAll_Ends` holds the cases.
 - **`jump` aligns to the interval**: it lands on the first period from its target that `first + k*step` reaches, so
   jumping never skips a period that could match. `step` is capped at `maxStep` so that its arithmetic cannot
-  overflow.
+  overflow, and so are X-FREQ's periods: one under 69ns ends 2^62 periods after the start, not in 9999.
 - **BYSETPOS indexes the period's candidates without building them**: days by times, by `i/len(times)` and
   `i%len(times)`. A day can have 86400 times.
 - **No `iter.Pull`**: sources are pull iterators (`source.next`), merged directly, so that TinyGo builds it and nothing
@@ -83,12 +87,17 @@ package-level var), and `gosec`'s G115 on integer conversions. CI runs `make che
 - **A Set's Start is always an occurrence** ("DTSTART always counts as the first occurrence"), unless an EXDATE or
   EXRULE takes it away. `Rule.All(start)` yields only the rule's matches, as dateutil.
 - **Sets take several RRULEs and EXRULEs**, which RFC 5545 calls undefined and dropped: their union, as dateutil.
-- **Strict parsing**: unknown properties, parameters and rule parts are errors; value types must match DTSTART's
-  (a DATE UNTIL, RDATE or EXDATE with a DATE-TIME DTSTART, and the reverse, are `ErrInvalid`). A floating UNTIL, RDATE
-  or EXDATE is read in Start's location. A lenient mode is in TODO.md.
+- **Strict parsing**: unknown properties, parameters and rule parts are errors (X-FREQ is the one `X-` part read);
+  value types must match DTSTART's (a DATE UNTIL, RDATE or EXDATE with a DATE-TIME DTSTART, and the reverse, are
+  `ErrInvalid`). A floating UNTIL, RDATE or EXDATE is read in Start's location. A lenient mode is in TODO.md.
+- **X-FREQ**, this package's rule part, is an ISO 8601 duration of hours, minutes and seconds, to the nanosecond:
+  days and longer are `ErrUnsupported`, `R/…` is `ErrSyntax`. It replaces FREQ and INTERVAL, which any valid values
+  keep for other readers. It expands as SECONDLY: every BYxxx part limits, none takes the start's value, BYSETPOS sees
+  one candidate, but a numbered BYDAY counts as FREQ says (`nthYear`). It steps on the wall clock, so that
+  `X-FREQ=PT1H` is `FREQ=HOURLY` (`TestAll_XFreq`). `gen.py` has none: dateutil does not know it.
 - **Floating times default to UTC**, not `time.Local`, so that results do not depend on the host.
-- **The library does not keep a rule's text**: `String` writes the grammar's order, UNTIL in UTC, INTERVAL whenever
-  set, WKST unless Monday. `Parse(r.String())` gives back `r` (`FuzzParse`).
+- **The library does not keep a rule's text**: `String` writes the grammar's order, X-FREQ after FREQ, UNTIL in UTC,
+  INTERVAL whenever set, WKST unless Monday. `Parse(r.String())` gives back `r` (`FuzzParse`).
 - **Leap seconds**: BYSECOND=60 parses and never matches; a DATE-TIME at second 60 is `ErrUnsupported`.
 
 ## Tests

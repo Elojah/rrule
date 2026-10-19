@@ -97,6 +97,13 @@ type Rule struct {
 	// Interval is how many periods of Freq separate those the rule repeats in, 1 if 0.
 	Interval int
 
+	// XFreq is the period of X-FREQ, a rule part of this package's for periods that FREQ cannot write, such as half a
+	// second: X-FREQ=PT0.5S, an ISO 8601 duration of hours, minutes and seconds. If it is not zero, the rule repeats
+	// every XFreq from its start, on its wall clock as FREQ does, and Freq and Interval are only for readers that do
+	// not know X-FREQ. Every BYxxx part then limits, none takes the start's value, and BYSETPOS picks among a period's
+	// one candidate. A numbered BYDAY still counts in the year or the month, as Freq says.
+	XFreq time.Duration
+
 	// Count is how many occurrences there are, without bound if 0. A rule may have a Count or an Until, not both.
 	Count int
 
@@ -130,6 +137,10 @@ func (r Rule) Validate() error {
 
 	if r.Interval < 0 {
 		return partError(ErrInvalid, "INTERVAL", strconv.Itoa(r.Interval), "")
+	}
+
+	if r.XFreq < 0 {
+		return partError(ErrInvalid, "X-FREQ", r.XFreq.String(), "")
 	}
 
 	if r.Count < 0 {

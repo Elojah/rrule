@@ -98,6 +98,16 @@ func TestSet_String(t *testing.T) {
 			want:  []string{"2026-01-01 00:00:00", "2026-07-04 00:00:00", "2028-01-01 00:00:00"},
 			where: paris,
 		},
+		{
+			name: "X-FREQ",
+			in: []string{
+				"DTSTART;TZID=Europe/Paris:20260105T090000", "RRULE:FREQ=MINUTELY;X-FREQ=PT1M30S;COUNT=3",
+				"EXDATE;TZID=Europe/Paris:20260105T090130",
+			},
+			form:  rrule.Zoned,
+			want:  []string{"2026-01-05 09:00:00", "2026-01-05 09:03:00"},
+			where: paris,
+		},
 	}
 
 	for _, c := range cases {

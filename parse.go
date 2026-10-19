@@ -1,6 +1,7 @@
 package rrule
 
 import (
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -326,6 +327,8 @@ func (r *Rule) parsePart(name, value string) error {
 		r.Count, err = parsePositive(name, value)
 	case "INTERVAL":
 		r.Interval, err = parsePositive(name, value)
+	case "X-FREQ":
+		r.XFreq, err = parseXFreq(value)
 	case "BYSECOND":
 		r.BySecond, err = parseInts(name, value, 2, false)
 	case "BYMINUTE":
@@ -371,6 +374,165 @@ func parseFreq(value string) (Frequency, error) {
 	}
 
 	return 0, partError(ErrSyntax, "FREQ", value, "")
+}
+
+// parseXFreq reads X-FREQ, an ISO 8601 duration, PnYnMnWnDTnHnMnS, of which only hours, minutes and seconds are
+// handled, to the nanosecond. The last component may have a fraction, after a dot or a comma.
+func parseXFreq(value string) (time.Duration, error) {
+	s, ok := strings.CutPrefix(value, "P")
+	date, clock, timed := strings.Cut(s, "T")
+	dates, okDate := durationParts(date, "YMWD")
+	times, okTime := durationParts(clock, "HMS")
+	parts := append(dates, times...)
+
+	if !ok || !okDate || !okTime || len(parts) == 0 || timed && len(times) == 0 {
+		return 0, partError(ErrSyntax, "X-FREQ", value, "not an ISO 8601 duration")
+	}
+
+	for _, p := range parts[:len(parts)-1] {
+		if p.frac != "" {
+			return 0, partError(ErrSyntax, "X-FREQ", value, "a fraction but on the last component")
+		}
+	}
+
+	if len(dates) > 0 {
+		return 0, partError(ErrUnsupported, "X-FREQ", value, "only hours, minutes and seconds")
+	}
+
+	var d int64
+
+	for _, p := range times {
+		ns, reason := p.nanoseconds()
+		if reason == "" && ns > math.MaxInt64-d {
+			reason = "longer than a time.Duration"
+		}
+
+		if reason != "" {
+			return 0, partError(ErrUnsupported, "X-FREQ", value, reason)
+		}
+
+		d += ns
+	}
+
+	if d == 0 {
+		return 0, partError(ErrInvalid, "X-FREQ", value, "")
+	}
+
+	return time.Duration(d), nil
+}
+
+// durationPart is a component of an ISO 8601 duration: its digits, those of its fraction, and its designator.
+type durationPart struct {
+	whole, frac string
+	unit        byte
+}
+
+// durationParts splits s into components, whose designators come in the order of units, each once at most.
+func durationParts(s, units string) ([]durationPart, bool) {
+	var parts []durationPart
+
+	digits := func(s string) int {
+		i := 0
+		for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+			i++
+		}
+
+		return i
+	}
+
+	for s != "" {
+		i := digits(s)
+		p := durationPart{whole: s[:i]}
+
+		if i < len(s) && (s[i] == '.' || s[i] == ',') {
+			n := digits(s[i+1:])
+			p.frac, i = s[i+1:i+1+n], i+1+n
+
+			if n == 0 {
+				return nil, false
+			}
+		}
+
+		if p.whole == "" || i == len(s) {
+			return nil, false
+		}
+
+		u := strings.IndexByte(units, s[i])
+		if u < 0 {
+			return nil, false
+		}
+
+		p.unit = s[i]
+		parts = append(parts, p)
+		units, s = units[u+1:], s[i+1:]
+	}
+
+	return parts, true
+}
+
+// nanoseconds returns the duration of an hours, minutes or seconds component, or why it is not a time.Duration.
+func (p durationPart) nanoseconds() (int64, string) {
+	const long, fine = "longer than a time.Duration", "finer than a nanosecond"
+
+	unit := int64(time.Second)
+
+	switch p.unit {
+	case 'H':
+		unit = int64(time.Hour)
+	case 'M':
+		unit = int64(time.Minute)
+	}
+
+	whole, ok := parseUint(p.whole)
+	if !ok || whole > math.MaxInt64/unit {
+		return 0, long
+	}
+
+	ns := whole * unit
+
+	frac := strings.TrimRight(p.frac, "0")
+	if frac == "" {
+		return ns, ""
+	}
+
+	if len(frac) > 18 {
+		return 0, fine
+	}
+
+	// The fraction is f/10^k units, a whole number of nanoseconds only if 10^k/g divides f, g being gcd(unit, 10^k).
+	f, _ := parseUint(frac)
+	pow := int64(1)
+
+	for range len(frac) {
+		pow *= 10
+	}
+
+	g := gcd(unit, pow)
+	if f%(pow/g) != 0 {
+		return 0, fine
+	}
+
+	if extra := f / (pow / g) * (unit / g); ns <= math.MaxInt64-extra {
+		return ns + extra, ""
+	}
+
+	return 0, long
+}
+
+// parseUint reads decimal digits, or returns false if they are more than an int64 holds.
+func parseUint(s string) (int64, bool) {
+	var n int64
+
+	for _, c := range []byte(s) {
+		d := int64(c - '0')
+		if n > (math.MaxInt64-d)/10 {
+			return 0, false
+		}
+
+		n = n*10 + d
+	}
+
+	return n, true
 }
 
 // parsePositive reads COUNT or INTERVAL, which the grammar allows to be 0, but which mean nothing then.
