@@ -42,7 +42,7 @@ func (f Frequency) String() string {
 }
 
 // Weekday is a day of the week. It counts from Monday, unlike time.Weekday, so that the zero WeekStart is Monday,
-// RFC 5545's default.
+// RFC 5545's default. WeekdayOf and Time convert from and to a time.Weekday.
 type Weekday int
 
 // Weekdays.
@@ -56,6 +56,16 @@ const (
 	Sunday
 )
 
+// WeekdayOf returns d as a Weekday, such as WeekdayOf(t.Weekday()) for t's, or -1 if d is out of range, which
+// Validate refuses.
+func WeekdayOf(d time.Weekday) Weekday {
+	if d < time.Sunday || d > time.Saturday {
+		return -1
+	}
+
+	return (Weekday(d) + 6) % 7
+}
+
 // String returns the weekday as RFC 5545 writes it, such as MO.
 func (d Weekday) String() string {
 	if d < Monday || d > Sunday {
@@ -63,6 +73,15 @@ func (d Weekday) String() string {
 	}
 
 	return weekdayCodes[d]
+}
+
+// Time returns the weekday as a time.Weekday, or -1 if it is out of range.
+func (d Weekday) Time() time.Weekday {
+	if d < Monday || d > Sunday {
+		return -1
+	}
+
+	return time.Weekday(d+1) % 7
 }
 
 // Nth returns the nth such weekday of the month or the year, from its end if n is negative: Friday.Nth(-1) is the

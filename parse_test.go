@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -325,6 +326,35 @@ func TestStrings(t *testing.T) {
 	} {
 		if got != want {
 			t.Errorf("got %s, want %s", got, want)
+		}
+	}
+}
+
+// TestWeekdayOf checks the conversions from and to time.Weekday by the names RFC 5545 writes, the first two letters
+// of time's, and that a weekday out of range stays so.
+func TestWeekdayOf(t *testing.T) {
+	t.Parallel()
+
+	for d := time.Sunday; d <= time.Saturday; d++ {
+		w := rrule.WeekdayOf(d)
+		if want := strings.ToUpper(d.String()[:2]); w.String() != want {
+			t.Errorf("%s: %s, want %s", d, w, want)
+		}
+
+		if back := w.Time(); back != d {
+			t.Errorf("%s: %s, back to %s", d, w, back)
+		}
+	}
+
+	for _, d := range []time.Weekday{-1, 7} {
+		if w := rrule.WeekdayOf(d); w != -1 {
+			t.Errorf("%d: %s, want -1", d, w)
+		}
+	}
+
+	for _, w := range []rrule.Weekday{-1, 7} {
+		if d := w.Time(); d != -1 {
+			t.Errorf("%s: %d, want -1", w, d)
 		}
 	}
 }

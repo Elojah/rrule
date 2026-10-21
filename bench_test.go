@@ -76,6 +76,19 @@ func BenchmarkRule_All_None(b *testing.B) {
 	}
 }
 
+// BenchmarkRule_Between_Far expands a minute of a rule of every second, ten years after its start.
+func BenchmarkRule_Between_Far(b *testing.B) {
+	r := rrule.Rule{Freq: rrule.Secondly}
+	start := time.Date(2016, 1, 5, 9, 0, 0, 0, zone(b, "Europe/Paris"))
+	from := start.AddDate(10, 0, 0)
+
+	for b.Loop() {
+		if n := len(take(r.Between(start, from, from.Add(time.Minute)), -1)); n != 60 {
+			b.Fatalf("%d occurrences", n)
+		}
+	}
+}
+
 // BenchmarkSet_All merges 100 occurrences of a set with every kind of source.
 func BenchmarkSet_All(b *testing.B) {
 	s := parseSet(b,

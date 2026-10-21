@@ -4,6 +4,6 @@ package rrule
 var (
 	DaysFromCivil = daysFromCivil
 	CivilFromDays = civilFromDays
-	WeekdayOf     = weekdayOf
+	WeekdayOfDay  = weekdayOf
 	WeekNo        = weekNo
 )

@@ -59,9 +59,28 @@ func TestDateutil(t *testing.T) {
 			}
 
 			// END is included. Between ends there, where All would go on to 9999 for a rule without more.
+			want := strings.Fields(lines[3])
 			got := take(r.Between(start, start, end.Add(time.Second)), limit)
 
-			equal(t, format(got, layout), strings.Fields(lines[3]))
+			equal(t, format(got, layout), want)
+
+			// From the middle occurrence, which Between seeks to unless the rule has COUNT. If there are limit, those
+			// after the last are not known.
+			if len(want) < 2 {
+				return
+			}
+
+			i, n := len(want)/2, -1
+			if len(want) == limit {
+				n = limit - i
+			}
+
+			from, err := time.Parse(layout, want[i])
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			equal(t, format(take(r.Between(start, from, end.Add(time.Second)), n), layout), want[i:])
 		})
 	}
 

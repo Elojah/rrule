@@ -12,7 +12,9 @@ merge), `expand.go` (the expansion of a rule), `calendar.go` (civil days, week n
 `examples/` are programs.
 
 `testdata/dateutil.txt` is what python-dateutil expands random rules to: `make vectors` writes it with
-`tools/vectors/gen.py`, never edit it. `testdata/zoneinfo` holds the TZif files tests load their zones from.
+`tools/vectors/gen.py`, never edit it. The same on any machine: `gen.py` lowers dateutil's `datetime.MAXYEAR` to the
+year after a case's END, and a case over its timeout stops it rather than being left out. `testdata/zoneinfo` holds
+the TZif files tests load their zones from.
 
 ## Commands
 
@@ -57,9 +59,11 @@ package-level var), and `gosec`'s G115 on integer conversions. CI runs `make che
   before later ones under HOURLY, MINUTELY and X-FREQ. COUNT and UNTIL apply after; `merger` relies on sorted sources.
 - **Expansion always ends**: `periods` bounds the last period by 9999-12-31 or the day after UNTIL; `reachable` ends a
   rule whose interval never lands on a BYHOUR, BYMINUTE or BYSECOND (a gcd check); periods shorter than a day jump
-  over a filtered day, hour, minute or second (`fillTime`, `nextBit`), and DAILY and shorter over a month BYMONTH
-  leaves out (`nextDay`). A SECONDLY or X-FREQ period has one candidate, so a BYSETPOS without 1 or -1 ends the rule
-  at once. `TestAll_Ends` holds the cases.
+  over a filtered day, hour, minute or second (`fillTime`, `nextBit`). `nextDay` jumps over the months, days of the
+  month and weekdays that BYMONTH, BYMONTHDAY and BYDAY leave out (`monthMask`, which keeps every weekday a numbered
+  BYDAY has), to the day after `lastDay` at most: DAILY and shorter on a filtered day, and WEEKLY, MONTHLY and YEARLY
+  on a period without days (`skip`). A SECONDLY or X-FREQ period has one candidate, so a BYSETPOS without 1 or -1 ends
+  the rule at once. `TestAll_Ends` holds the cases.
 - **`jump` aligns to the interval**: it lands on the first period from its target that `first + k*step` reaches, so
   jumping never skips a period that could match. `step` is capped at `maxStep` so that its arithmetic cannot
   overflow, and so are X-FREQ's periods: one under 69ns ends 2^62 periods after the start, not in 9999.
@@ -72,6 +76,11 @@ package-level var), and `gosec`'s G115 on integer conversions. CI runs `make che
   `merger.end` the merge, so that a rule nothing matches, or a set whose exclusions take everything away, ends at
   `to`. Tests that only look at a window use `Between` (`TestDateutil`, `FuzzAll`): `All` going on to 9999 takes
   minutes under `-race -cover`, whose atomic counters parallel tests contend on.
+- **`Between` and `Set.After` seek**, unless a rule has COUNT: `newExpansion`'s `from` jumps to the period holding
+  `seekKey`, from's wall clock, or, less than a gap after clocks go forward, its wall clock with the offset from before
+  the gap, which `wall` reads the gap's wall clocks with: they are at or after from, although before its wall clock.
+  Skipped periods hold only instants before from, so what `prev` drops at or after it is the same.
+  `TestRule_Between_DST` seeks every 10 minutes around changes; `TestDateutil` and `FuzzAll` seek too.
 
 ## Decisions not to revert
 
@@ -80,7 +89,8 @@ package-level var), and `gosec`'s G115 on integer conversions. CI runs `make che
   longer: BYMINUTE; MINUTELY and longer: BYSECOND), which is the RFC's expand/limit table. BYSETPOS applies to a
   period's candidates before the start, UNTIL and COUNT. Where dateutil departs from the RFC, the library follows the
   RFC, and `gen.py` keeps such rules out of the vectors: a BYDAY with numbered and plain days (dateutil requires both),
-  BYSECOND=60.
+  BYSECOND=60, BYWEEKNO=52, 53, -52 or -53 (dateutil leaves out the end of a year in the next one's week -52 or -53,
+  and miscounts the weeks of the year before at its start, for any WKST).
 - **DST gaps move the wall clock, they do not drop it.** RFC 5545 3.3.10 says both: that a recurrence's nonexistent
   local time is read as 3.3.5 reads a DATE-TIME, and that such an instance is ignored. Calendars move it; so does this.
   Invalid dates (February 30) are dropped and not counted.
@@ -106,7 +116,9 @@ package-level var), and `gosec`'s G115 on integer conversions. CI runs `make che
 - Zones come from `testdata/zoneinfo` through `loadZone`, never the host's: the TinyGo container may have none.
 - `TestRFC` runs every example of RFC 5545 3.8.5.3 through ParseSet. The RFC lists 15:00 for "every 3 hours until
   17:00Z", an erratum: 15:00 EDT is 19:00Z.
-- `TestDateutil` compares each vector's first 50 occurrences, up to its END. Change the generator or its seed only
-  with `make vectors`, and check the diff makes sense.
-- `FuzzAll` checks occurrences against an oracle of its own, `mismatch`, not the expansion's code.
+- `TestDateutil` compares each vector's first 50 occurrences, up to its END, and again from the middle one. Change the
+  generator or its seed only with `make vectors`, and check the diff makes sense: new cases go after the others, which
+  keep their random numbers.
+- `FuzzAll` checks occurrences against an oracle of its own, `mismatch`, not the expansion's code, and against its own
+  from just after the middle one.
 - Each example has an `Example()` with `// Output:`, and `tinygo-run` diffs `tinygo run`'s output with it.

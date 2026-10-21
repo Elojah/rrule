@@ -22,7 +22,7 @@ func TestCivil(t *testing.T) {
 				t.Fatalf("day %d: %d-%d-%d, want %s", day, y, m, dd, d.Format(time.DateOnly))
 			}
 
-			if wd := rrule.WeekdayOf(day); (int(wd)+1)%7 != int(d.Weekday()) {
+			if wd := rrule.WeekdayOfDay(day); (int(wd)+1)%7 != int(d.Weekday()) {
 				t.Fatalf("%s: %s, want %s", d.Format(time.DateOnly), wd, d.Weekday())
 			}
 		}

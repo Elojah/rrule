@@ -138,6 +138,22 @@ func wall(day int64, sec int, nsec int, loc *time.Location, z *zoneCache) time.T
 	return t
 }
 
+// seekKey returns the first civil time, as a key, whose instant may be at or after from in loc: from's wall clock, or,
+// less than a gap after clocks go forward, its wall clock with the offset from before, which wall reads those in the
+// gap with. No wall clock before it is at or after from.
+func seekKey(from time.Time, loc *time.Location) int64 {
+	t := from.In(loc)
+	offset := zoneOffset(t)
+
+	if start, _ := t.ZoneBounds(); !start.IsZero() {
+		if before := offsetAt(start.Unix()-1, loc); before < offset && from.Unix()-start.Unix() < int64(offset-before) {
+			offset = before
+		}
+	}
+
+	return from.Unix() + int64(offset)
+}
+
 func offsetAt(unix int64, loc *time.Location) int {
 	return zoneOffset(time.Unix(unix, 0).In(loc))
 }

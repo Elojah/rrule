@@ -432,3 +432,87 @@ func TestRule_Between(t *testing.T) {
 		})
 	}
 }
+
+// TestRule_Between_DST checks that Between, which seeks to the period holding from, yields what it does from the start
+// on, for each from 10 minutes apart around each change of daylight saving time: a wall clock in a gap is at or after
+// from although it is before from's own. Lord Howe's gap is half an hour.
+func TestRule_Between_DST(t *testing.T) {
+	t.Parallel()
+
+	rules := []string{
+		"FREQ=HOURLY",
+		"FREQ=HOURLY;BYHOUR=2;BYMINUTE=15,45",
+		"FREQ=DAILY;BYHOUR=2,3;BYMINUTE=30",
+		"FREQ=MINUTELY;INTERVAL=7",
+		"FREQ=SECONDLY;INTERVAL=450;BYMINUTE=0,15,30,45,55",
+		"FREQ=SECONDLY;X-FREQ=PT25M",
+	}
+
+	for _, name := range []string{"America/New_York", "Europe/Paris", "Australia/Lord_Howe"} {
+		_, forward := time.Date(2026, 1, 1, 0, 0, 0, 0, zone(t, name)).ZoneBounds()
+		_, back := forward.ZoneBounds()
+
+		for _, change := range []time.Time{forward, back} {
+			for _, rule := range rules {
+				t.Run(name+" "+change.Format(time.RFC3339)+" "+rule, func(t *testing.T) {
+					t.Parallel()
+
+					r, err := rrule.Parse(rule)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					start := change.Add(-48*time.Hour - 13*time.Minute)
+					to := change.Add(24 * time.Hour)
+					all := take(r.Between(start, start, to), -1)
+
+					for from := change.Add(-3 * time.Hour); from.Before(change.Add(3 * time.Hour)); from = from.Add(10 * time.Minute) {
+						var want []time.Time
+
+						for _, o := range all {
+							if !o.Before(from) {
+								want = append(want, o)
+							}
+						}
+
+						equal(t, format(take(r.Between(start, from, to), -1), time.RFC3339), format(want, time.RFC3339))
+					}
+				})
+			}
+		}
+	}
+}
+
+// TestRule_Between_Far checks that Between and After do not go through the periods before from, which for a rule of
+// every second, or millisecond, from years ago, takes minutes.
+func TestRule_Between_Far(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2016, 1, 5, 9, 0, 0, 0, zone(t, "Europe/Paris"))
+	from := start.AddDate(10, 0, 0).Add(500 * time.Millisecond)
+	every := rrule.Rule{Freq: rrule.Secondly}
+
+	for _, c := range []struct {
+		rule rrule.Rule
+		to   time.Time
+		want []string
+	}{
+		{
+			rule: every,
+			to:   from.Add(3 * time.Second),
+			want: []string{"2026-01-05T09:00:01+01:00", "2026-01-05T09:00:02+01:00", "2026-01-05T09:00:03+01:00"},
+		},
+		{
+			rule: rrule.Rule{Freq: rrule.Secondly, XFreq: time.Millisecond, ByHour: []int{9}},
+			to:   from.Add(2 * time.Millisecond),
+			want: []string{"2026-01-05T09:00:00.5+01:00", "2026-01-05T09:00:00.501+01:00"},
+		},
+	} {
+		equal(t, format(take(c.rule.Between(start, from, c.to), -1), time.RFC3339Nano), c.want)
+	}
+
+	s := rrule.Set{Start: start, RRules: []rrule.Rule{every}, ExRules: []rrule.Rule{{Freq: rrule.Minutely}}}
+	if got, ok := s.After(from.Add(59 * time.Second)); !ok || got.Format(time.RFC3339) != "2026-01-05T09:01:01+01:00" {
+		t.Fatalf("After: got %s, %t", got, ok)
+	}
+}

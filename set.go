@@ -81,14 +81,15 @@ func (s Set) Validate() error {
 // The next occurrence may be far: All goes through the occurrences that ExRules and ExDates take away to find it, and
 // through every period to 9999 of an RRule whose BYxxx parts nothing matches. Between ends instead.
 func (s Set) All() iter.Seq[time.Time] {
-	return s.until(time.Time{})
+	return s.merged(time.Time{}, time.Time{})
 }
 
 // Between returns the set's occurrences at or after from and before to. Unlike All's, its iteration ends at to,
-// however few occurrences RRules have, and however many ExRules and ExDates take away.
+// however few occurrences RRules have, and however many ExRules and ExDates take away. Rules expand from the period
+// holding from, as Rule.Between's do.
 func (s Set) Between(from, to time.Time) iter.Seq[time.Time] {
 	return func(yield func(time.Time) bool) {
-		for t := range s.until(to) {
+		for t := range s.merged(from, to) {
 			if !t.Before(from) && !yield(t) {
 				return
 			}
@@ -96,9 +97,10 @@ func (s Set) Between(from, to time.Time) iter.Seq[time.Time] {
 	}
 }
 
-// After returns the set's first occurrence after t, excluded, or false if there is none.
+// After returns the set's first occurrence after t, excluded, or false if there is none. Rules expand from the period
+// holding t, as in Between, and as far as in All.
 func (s Set) After(t time.Time) (time.Time, bool) {
-	for o := range s.All() {
+	for o := range s.merged(t, time.Time{}) {
 		if o.After(t) {
 			return o, true
 		}
@@ -107,10 +109,11 @@ func (s Set) After(t time.Time) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// until returns the set's occurrences before end, or all of them if end is zero.
-func (s Set) until(end time.Time) iter.Seq[time.Time] {
+// merged returns the set's occurrences before end, or all of them if end is zero. It may leave out those before from,
+// if from is not zero.
+func (s Set) merged(from, end time.Time) iter.Seq[time.Time] {
 	return func(yield func(time.Time) bool) {
-		m := s.merge(end)
+		m := s.merge(from, end)
 		if m == nil {
 			return
 		}
@@ -163,8 +166,9 @@ func (h *head) advance() {
 	h.t, h.ok = h.src.next()
 }
 
-// merge returns the merger of the set's sources, which end at end if it is not zero.
-func (s Set) merge(end time.Time) *merger {
+// merge returns the merger of the set's sources, which end at end if it is not zero, and may start at from if it is
+// not zero.
+func (s Set) merge(from, end time.Time) *merger {
 	if s.Validate() != nil {
 		return nil
 	}
@@ -178,14 +182,14 @@ func (s Set) merge(end time.Time) *merger {
 		return append(heads, h)
 	}
 
-	m.in = add(m.in, sorted(append([]time.Time{s.Start}, s.RDates...)))
+	m.in = add(m.in, sorted(append([]time.Time{s.Start}, s.RDates...), from))
 	for _, r := range s.RRules {
-		m.in = add(m.in, newExpansion(r, s.Start, end))
+		m.in = add(m.in, newExpansion(r, s.Start, from, end))
 	}
 
-	m.out = add(m.out, sorted(s.ExDates))
+	m.out = add(m.out, sorted(s.ExDates, from))
 	for _, r := range s.ExRules {
-		m.out = add(m.out, newExpansion(r, s.Start, end))
+		m.out = add(m.out, newExpansion(r, s.Start, from, end))
 	}
 
 	return m
@@ -240,10 +244,15 @@ func (m *merger) excluded(t time.Time) bool {
 	return false
 }
 
-// sorted returns a sorted copy of ts, which it leaves as they are.
-func sorted(ts []time.Time) *times {
+// sorted returns a sorted copy of ts, which it leaves as they are, without those before from if it is not zero.
+func sorted(ts []time.Time, from time.Time) *times {
 	c := times(slices.Clone(ts))
 	slices.SortFunc(c, time.Time.Compare)
+
+	if !from.IsZero() {
+		i, _ := slices.BinarySearchFunc(c, from, time.Time.Compare)
+		c = c[i:]
+	}
 
 	return &c
 }

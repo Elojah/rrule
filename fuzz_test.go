@@ -125,21 +125,23 @@ func FuzzAll(f *testing.F) {
 
 		const span = 200 * 365 * 86400 // from 1970
 
+		const most = 200
+
 		start := time.Unix((at%span+span)%span, 0).UTC()
-		n := 0
+		end := start.AddDate(30, 0, 0)
 
-		var prev time.Time
+		var all []time.Time
 
-		for o := range r.Between(start, start, start.AddDate(30, 0, 0)) {
-			if n == 200 {
+		for o := range r.Between(start, start, end) {
+			if len(all) == most {
 				break
 			}
 
-			switch {
+			switch n := len(all); {
 			case o.Before(start):
 				t.Fatalf("%s before the start", o)
-			case n > 0 && !o.After(prev):
-				t.Fatalf("%s after %s", o, prev)
+			case n > 0 && !o.After(all[n-1]):
+				t.Fatalf("%s after %s", o, all[n-1])
 			case !r.Until.IsZero() && o.After(r.Until):
 				t.Fatalf("%s after UNTIL", o)
 			case r.Count > 0 && n == r.Count:
@@ -152,8 +154,20 @@ func FuzzAll(f *testing.F) {
 				t.Fatalf("%s: %s", o, why)
 			}
 
-			prev = o
-			n++
+			all = append(all, o)
+		}
+
+		// From just after an occurrence, Between seeks unless the rule has COUNT: the same occurrences, checked against
+		// the expansion's own. If there are most, those after the last are not known.
+		if i := len(all) / 2; i > 0 {
+			n := -1
+			if len(all) == most {
+				n = most - i
+			}
+
+			if got := take(r.Between(start, all[i-1].Add(time.Nanosecond), end), n); !slices.EqualFunc(got, all[i:], time.Time.Equal) {
+				t.Fatalf("from %s:\ngot %s\nwant %s", all[i-1], got, all[i:])
+			}
 		}
 	})
 }

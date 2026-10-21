@@ -22,9 +22,12 @@ func (r Rule) All(start time.Time) iter.Seq[time.Time] {
 
 // Between returns the rule's occurrences from start, as All does, at or after from and before to. Unlike All's, its
 // iteration ends at to, however few occurrences the rule has. A zero to is no end.
+//
+// Between expands the rule from the period holding from, however far after start, unless it has a Count, which counts
+// occurrences from start.
 func (r Rule) Between(start, from, to time.Time) iter.Seq[time.Time] {
 	return func(yield func(time.Time) bool) {
-		e := newExpansion(r, start, to)
+		e := newExpansion(r, start, from, to)
 		if e == nil {
 			return
 		}
@@ -54,6 +57,7 @@ type expansion struct {
 	first    int64 // start's period, which the others are counted from
 	period   int64
 	last     int64 // the last period that may hold an occurrence
+	lastDay  int64 // and the last day
 	every    int64 // X-FREQ in nanoseconds, the step of a SECONDLY rule's periods if not 0
 	nsec     int   // of the current period's candidates: start's, but under X-FREQ
 	startKey int64 // start's civil time, as day*secondsPerDay + second of the day
@@ -71,6 +75,7 @@ type expansion struct {
 	monthDays   [2]uint32
 	weekdays    uint8
 	nth         [7][2]uint64 // per weekday
+	wdays       uint8        // the weekdays of BYDAY, numbered or not, or all of them without BYDAY
 	hasWeekNo   bool
 	hasYearDay  bool
 	hasMonthDay bool
@@ -110,8 +115,9 @@ type expansion struct {
 	done    bool
 }
 
-// newExpansion returns the expansion of r from start, to end excluded if it is not zero, or nil if r is not valid.
-func newExpansion(r Rule, start, end time.Time) *expansion {
+// newExpansion returns the expansion of r from start, to end excluded if it is not zero, or nil if r is not valid. If
+// from is not zero, the expansion may leave out the occurrences before it.
+func newExpansion(r Rule, start, from, end time.Time) *expansion {
 	if r.Validate() != nil {
 		return nil
 	}
@@ -157,6 +163,10 @@ func newExpansion(r Rule, start, end time.Time) *expansion {
 	case e.freq == Secondly && len(e.setPos) > 0 && !slices.Contains(e.setPos, 1) && !slices.Contains(e.setPos, -1):
 		e.done = true // a SECONDLY period has one candidate, which BYSETPOS leaves out
 	default:
+		if r.Count == 0 && !from.IsZero() {
+			e.seek(from)
+		}
+
 		e.fill()
 	}
 
@@ -267,6 +277,15 @@ func (e *expansion) filters(r Rule, start time.Time) {
 
 	e.hasYearDay = e.yearDays != [2][6]uint64{}
 	e.hasMonthDay = e.monthDays != [2]uint32{}
+
+	e.wdays = e.weekdays
+	for _, d := range r.ByDay {
+		e.wdays |= 1 << d.Weekday
+	}
+
+	if e.wdays == 0 {
+		e.wdays = 1<<7 - 1
+	}
 }
 
 // timesOfDay sets the hours, minutes and seconds, those that expand defaulting to start's, and the times they make.
@@ -332,6 +351,8 @@ func (e *expansion) periods(r Rule, startDay int64, startSec int) {
 			lastDay = min(lastDay, daysFromCivil(t.In(e.loc).Date())+1)
 		}
 	}
+
+	e.lastDay = lastDay
 
 	if e.every > 0 {
 		// The periods of X-FREQ count from start's, 0, to the last before the day after lastDay. Interval is FREQ's.
@@ -483,6 +504,67 @@ func (e *expansion) jump(target int64) {
 	}
 }
 
+// skip moves on from a WEEKLY, MONTHLY or YEARLY period that no day passes to the one holding the next day that may:
+// those in between have none either.
+func (e *expansion) skip() {
+	var last int64 // the period's last day
+
+	switch e.freq {
+	case Yearly:
+		last = daysFromCivil(int(e.period), time.December, 31)
+	case Monthly:
+		y := floorDiv(e.period, 12)
+		m := time.Month(e.period - y*12 + 1)
+		last = daysFromCivil(int(y), m, monthLen(int(y), m))
+	case Weekly:
+		last = e.period + 6
+	case Secondly, Minutely, Hourly, Daily:
+		e.advance() // fillDays skips their days itself
+
+		return
+	}
+
+	e.jump(e.periodOf(e.nextDay(last) * secondsPerDay))
+}
+
+// seek moves to the period holding the first wall clock that may be at or after from, if it is after start's.
+func (e *expansion) seek(from time.Time) {
+	if key := seekKey(from, e.loc); key > e.startKey {
+		e.jump(e.periodOf(key))
+	}
+}
+
+// periodOf returns the period holding the civil time key, or under X-FREQ the first at or after it.
+func (e *expansion) periodOf(key int64) int64 {
+	if e.every > 0 {
+		return e.periodAt(key)
+	}
+
+	day := floorDiv(key, secondsPerDay)
+
+	switch e.freq {
+	case Yearly:
+		y, _, _ := civilFromDays(day)
+
+		return int64(y)
+	case Monthly:
+		y, m, _ := civilFromDays(day)
+
+		return int64(y)*12 + int64(m) - 1
+	case Weekly:
+		return day - int64((weekdayOf(day)-e.wkst+7)%7)
+	case Daily:
+		return day
+	case Hourly:
+		return floorDiv(key, 3600)
+	case Minutely:
+		return floorDiv(key, 60)
+	case Secondly:
+	}
+
+	return key
+}
+
 // fill finds the candidates of the current period, moving on to the next until one has some.
 func (e *expansion) fill() {
 	for !e.done {
@@ -493,7 +575,7 @@ func (e *expansion) fill() {
 		if e.fillDays() {
 			nd, nt := len(e.days), len(e.times)
 			if nd == 0 {
-				e.advance()
+				e.skip()
 
 				continue
 			}
@@ -572,11 +654,34 @@ func (e *expansion) fillDays() bool {
 // monthDays1 appends the days of a month that pass the filters.
 func (e *expansion) monthDays1(y int, m time.Month) {
 	first := daysFromCivil(y, m, 1)
-	for d := range monthLen(y, m) {
-		if day := first + int64(d); e.checkDay(day, y, m, d+1) {
+	for mask := e.monthMask(y, m, first); mask != 0; mask &= mask - 1 {
+		d := bits.TrailingZeros32(mask)
+		if day := first + int64(d) - 1; e.checkDay(day, y, m, d) {
 			e.days = append(e.days, day)
 		}
 	}
+}
+
+// monthMask returns the days of a month that BYMONTHDAY and the weekdays of BYDAY may pass, as bits 1 to its length:
+// checkDay checks the rest. first is the month's first day.
+func (e *expansion) monthMask(y int, m time.Month, first int64) uint32 {
+	n := monthLen(y, m)
+	mask := ^uint32(0) >> (31 - n) &^ 1
+
+	if e.hasMonthDay {
+		// Bit d of the negative set is day n+1-d: reversed, bit 31-d.
+		mask &= e.monthDays[0] | bits.Reverse32(e.monthDays[1])<<1>>(31-n)
+	}
+
+	if e.wdays != 1<<7-1 {
+		// Day d is the first's weekday, d-1 days on: the weekdays from the first's, over 5 weeks, from bit 1.
+		wd := weekdayOf(first)
+		w := uint32(e.wdays)
+		w = (w>>wd | w<<(7-wd)) & (1<<7 - 1)
+		mask &= (w | w<<7 | w<<14 | w<<21 | w<<28) << 1
+	}
+
+	return mask
 }
 
 // fillTime is fillDays for periods shorter than a day.
@@ -611,11 +716,7 @@ func (e *expansion) fillTime() bool {
 	// Every period before the next day, hour, minute or second the rule has is filtered: jump lands on the first of
 	// them that the interval reaches.
 	to := func(day int64, sec int) {
-		if key := day*secondsPerDay + int64(sec); e.every > 0 {
-			e.jump(e.periodAt(key))
-		} else {
-			e.jump(key / unit)
-		}
+		e.jump(e.periodOf(day*secondsPerDay + int64(sec)))
 	}
 
 	switch {
@@ -684,20 +785,25 @@ func (e *expansion) dayOK(day int64) bool {
 	return c.pass
 }
 
-// nextDay returns the day after day, or, if BYMONTH leaves out day's month, the first of the next month it has.
+// nextDay returns the first day after day that BYMONTH, BYMONTHDAY and the weekdays of BYDAY may pass, or one after
+// the last day if none does: the days it skips cannot match.
 func (e *expansion) nextDay(day int64) int64 {
-	y, m, _ := civilFromDays(day)
-	if e.months == 0 || e.months&(1<<m) != 0 {
-		return day + 1
-	}
+	y, m, d := civilFromDays(day + 1)
 
 	for {
-		if m++; m > time.December {
-			y, m = y+1, time.January
+		if e.months == 0 || e.months&(1<<m) != 0 {
+			first := daysFromCivil(y, m, 1)
+			if first > e.lastDay {
+				return max(day, e.lastDay) + 1
+			}
+
+			if mask := e.monthMask(y, m, first) >> d << d; mask != 0 {
+				return first + int64(bits.TrailingZeros32(mask)) - 1
+			}
 		}
 
-		if e.months&(1<<m) != 0 {
-			return daysFromCivil(y, m, 1)
+		if m, d = m+1, 1; m > time.December {
+			y, m = y+1, time.January
 		}
 	}
 }

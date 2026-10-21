@@ -99,6 +99,8 @@ Each is a program, `go run ./examples/01-rule`, whose test checks what it prints
 - **Expansion ends**, in 9999 at the latest, even for a rule nothing matches. `Between` ends at its end, however few
   occurrences rules have and however many EXDATEs and EXRULEs take away; `All` and `Set.After` may go far to find the
   next.
+- **`Between` and `Set.After` start at their time**, not at DTSTART: the next minute of a rule of every second from
+  years ago costs what today's does. A rule with COUNT still expands from DTSTART, which COUNT counts from.
 - **Parsing is strict**: an unknown rule part, property or parameter is an error, and so is a rule part the RFC does
   not allow with its frequency. X-FREQ is the one `X-` rule part read. RFC 7529's RSCALE and SKIP, and RDATE periods,
   are `ErrUnsupported`.

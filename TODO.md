@@ -8,12 +8,9 @@ occurrences in its test, and a performance change with `benchstat` against `main
 
 ## Short-term: small, no new invariant
 
-- [ ] Seek in `Between` and `Set.After`: a rule without COUNT can start at the period holding `from` rather than at
-  the start's, which a SECONDLY rule from years ago needs. COUNT still needs every occurrence from the start.
-- [ ] Skip over months that BYMONTH leaves out in WEEKLY rules too, and over days nothing in a period matches, so
-  that a rule nothing matches ends sooner than going through every day to 9999 (`BenchmarkRule_All_None`).
-- [ ] `WeekdayOf(time.Weekday) Weekday` and `Weekday.Time()`, for code holding a `time.Weekday`.
-- [ ] More vectors: BYWEEKNO is in 26 cases of 573. Raise its share in `gen.py`, with WKST other than Monday.
+- [ ] `FuzzAll`'s oracle checks BYWEEKNO only with WKST=MO, against `time.ISOWeek`: count weeks by their definition,
+  as `TestWeekNo`'s `weekByDefinition` does, for every WKST. The vectors cannot check BYWEEKNO=±52 and ±53, which
+  dateutil gets wrong.
 
 ## Mid-term: more iCalendar
 
