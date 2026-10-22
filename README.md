@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="rrule" width="180">
+</p>
+
 # rrule
 
 [![CI](https://github.com/Elojah/rrule/actions/workflows/ci.yml/badge.svg)](https://github.com/Elojah/rrule/actions/workflows/ci.yml)
